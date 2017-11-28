@@ -40,6 +40,15 @@
 //config:	fsck is used to check and optionally repair one or more filesystems.
 //config:	In actuality, fsck is simply a front-end for the various file system
 //config:	checkers (fsck.fstype) available under Linux.
+//config:
+//config:config FEATURE_FSCK_LABEL
+//config:	bool "Support specifying devices by label or UUID"
+//config:	default y
+//config:	depends on FSCK
+//config:	select VOLUMEID
+//config:	help
+//config:	This allows for specifying a device by label or uuid, rather than by
+//config:	name. This feature utilizes the same functionality as blkid/findfs.
 
 //applet:IF_FSCK(APPLET(fsck, BB_DIR_SBIN, BB_SUID_DROP))
 
@@ -60,6 +69,11 @@
 //usage:     "\n	-t TYPE	List of filesystem types to check"
 
 #include "libbb.h"
+#if ENABLE_FEATURE_FSCK_LABEL
+# include "volume_id.h"
+#else
+# define resolve_mount_spec(fsname) ((void)0)
+#endif
 #include "common_bufsiz.h"
 
 /* "progress indicator" code is somewhat buggy and ext[23] specific.
@@ -522,7 +536,7 @@ static int wait_many(int flags)
  * Execute a particular fsck program, and link it into the list of
  * child processes we are waiting for.
  */
-static void execute(const char *type, const char *device,
+static void execute(const char *type, char *device,
 		const char *mntpt /*, int interactive */)
 {
 	int i;
@@ -542,7 +556,8 @@ static void execute(const char *type, const char *device,
 	}
 #endif
 
-	G.args[G.num_args - 2] = (char*)device;
+	resolve_mount_spec(&device);
+	G.args[G.num_args - 2] = device;
 	/* G.args[G.num_args - 1] = NULL; - already is */
 
 	if (G.verbose || G.noexecute) {
@@ -971,9 +986,6 @@ int fsck_main(int argc UNUSED_PARAM, char **argv)
 
 		/* "/dev/blk" or "/path" or "UUID=xxx" or "LABEL=xxx" */
 		if ((arg[0] == '/' && !opts_for_fsck) || strchr(arg, '=')) {
-// FIXME: must check that arg is a blkdev, or resolve
-// "/path", "UUID=xxx" or "LABEL=xxx" into block device name
-// ("UUID=xxx"/"LABEL=xxx" can probably shifted to fsck.auto duties)
 			devices = xrealloc_vector(devices, 2, num_devices);
 			devices[num_devices++] = arg;
 			continue;
