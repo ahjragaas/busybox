@@ -8725,7 +8725,7 @@ test_exec(/*const char *fullname,*/ struct stat *statb)
 }
 
 /* Circular dep: find_command->find_builtin->builtintab[]->hashcmd->find_command */
-static struct builtincmd *find_builtin(const char *name);
+static const struct builtincmd *find_builtin(const char *name);
 #if ENABLE_ASH_BASH_NOT_FOUND_HOOK
 static int evalfun(struct funcnode *func, int argc, char **argv, int flags);
 #endif
@@ -8746,7 +8746,7 @@ find_command(char *name, struct cmdentry *entry, int act, const char *path)
 	struct stat statb;
 	int e;
 	int updatetbl;
-	struct builtincmd *bcmd;
+	const struct builtincmd *bcmd;
 	int len;
 
 	/* If name contains a slash, don't use PATH or hash table */
@@ -10836,10 +10836,10 @@ static const struct builtincmd builtintab[] = {
 /*
  * Search the table of builtin commands.
  */
-static struct builtincmd *
+static const struct builtincmd *
 find_builtin(const char *name)
 {
-	struct builtincmd *bp;
+	const struct builtincmd *bp;
 
 	bp = bsearch(
 		name, builtintab, ARRAY_SIZE(builtintab), sizeof(builtintab[0]),
@@ -12927,12 +12927,12 @@ decode_dollar_squote(void)
 {
 	static const char C_escapes[] ALIGN1 = "nrbtfav""x\\01234567";
 	int c, cnt;
-	char *p;
 	char buf[4];
 
 	c = pgetc();
-	p = strchr(C_escapes, c);
-	if (p) {
+	if (strchr(C_escapes, c)) {
+		char *p;
+
 		buf[0] = c;
 		p = buf;
 		cnt = 3;
