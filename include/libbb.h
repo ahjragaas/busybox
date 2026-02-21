@@ -452,6 +452,11 @@ void *mmap_anon(size_t size) FAST_FUNC;
 void *xmmap_anon(size_t size) FAST_FUNC;
 
 #if defined(__x86_64__) || defined(i386)
+/* 0x7f would be better, but it causes alignment problems */
+# define ARCH_GLOBAL_PTR_OFF 0x80
+#endif
+
+#if defined(__x86_64__) || defined(i386)
 # define BB_ARCH_FIXED_PAGESIZE 4096
 #elif defined(__arm__) /* only 32bit, 64bit ARM has variable page size */
 # define BB_ARCH_FIXED_PAGESIZE 4096
@@ -460,11 +465,6 @@ void *xmmap_anon(size_t size) FAST_FUNC;
 //From Linux kernel inspection:
 //xtenza,s390[x],riscv,nios2,csky,sparc32: fixed 4k pages
 //sparc64,alpha,openrisc: fixed 8k pages
-#endif
-
-#if defined(__x86_64__) || defined(i386)
-/* 0x7f would be better, but it causes alignment problems */
-# define ARCH_GLOBAL_PTR_OFF 0x80
 #endif
 
 #if defined BB_ARCH_FIXED_PAGESIZE
@@ -703,6 +703,74 @@ struct fd_pair { int rd; int wr; };
 #define piped_pair(pair)  pipe(&((pair).rd))
 #define xpiped_pair(pair) xpipe(&((pair).rd))
 
+
+int parse_datestr(const char *date_str, struct tm *ptm) FAST_FUNC;
+time_t validate_tm_time(const char *date_str, struct tm *ptm) FAST_FUNC;
+char *strftime_HHMMSS(char *buf, unsigned len, time_t *tp) FAST_FUNC;
+char *strftime_YYYYMMDDHHMMSS(char *buf, unsigned len, time_t *tp) FAST_FUNC;
+void xgettimeofday(struct timeval *tv) FAST_FUNC;
+void xsettimeofday(const struct timeval *tv) FAST_FUNC;
+
+
+/* Generic I/O loop */
+struct connection;
+typedef struct ioloop_state {
+	struct connection *conns;
+	unsigned flags;
+	unsigned max_timeout;
+	unsigned current_iteration_timeout;
+	unsigned last_timeout;
+	int (*pre_poll_callback)(struct ioloop_state*);
+} ioloop_state_t;
+
+#define STRUCT_CONNECTION \
+	struct connection *next; \
+	ioloop_state_t *io; \
+	int read_fd; \
+	int write_fd; \
+	int (*have_buffer_to_read_into)(void *this); \
+	int (*have_data_to_write)(void *this); \
+	int (*read)(void *this); \
+	int (*write)(void *this); \
+
+typedef struct connection {
+	STRUCT_CONNECTION
+} connection_t;
+
+static ALWAYS_INLINE void free_connection(connection_t *conn)
+{
+	free(conn);
+}
+
+void FAST_FUNC conn_close_fds(connection_t *conn);
+void FAST_FUNC conn_close_fds_remove_and_free(connection_t *conn);
+static ALWAYS_INLINE ioloop_state_t *new_ioloop_state(void)
+{
+	ioloop_state_t *io = xzalloc(sizeof(*io));
+	return io;
+}
+static ALWAYS_INLINE void free_ioloop_state(ioloop_state_t *io)
+{
+	free(io);
+}
+static ALWAYS_INLINE void ioloop_decrease_current_timeout(ioloop_state_t *io, unsigned n)
+{
+	if (io->current_iteration_timeout > n)
+		io->current_iteration_timeout = n;
+}
+
+void FAST_FUNC ioloop_insert_conn(ioloop_state_t *io, connection_t *conn);
+void FAST_FUNC ioloop_remove_conn(ioloop_state_t *io, connection_t *conn);
+enum {
+	IOLOOP_FLAG_EXIT_IF_TIMEOUT       = (1 << 0),
+	//IOLOOP_FLAG_EXIT_IF_ALL_NOT_READY = (1 << 1),
+	/* ioloop_run return values */
+	IOLOOP_NO_CONNS = 0,
+	IOLOOP_TIMEOUT  = 1,
+};
+int FAST_FUNC ioloop_run(ioloop_state_t *io);
+
+
 /* Useful for having small structure members/global variables */
 typedef int8_t socktype_t;
 typedef int8_t family_t;
@@ -729,14 +797,6 @@ struct BUG_too_small {
 			/* | AF_IPX */
 			) <= 127 ? 1 : -1];
 };
-
-
-int parse_datestr(const char *date_str, struct tm *ptm) FAST_FUNC;
-time_t validate_tm_time(const char *date_str, struct tm *ptm) FAST_FUNC;
-char *strftime_HHMMSS(char *buf, unsigned len, time_t *tp) FAST_FUNC;
-char *strftime_YYYYMMDDHHMMSS(char *buf, unsigned len, time_t *tp) FAST_FUNC;
-void xgettimeofday(struct timeval *tv) FAST_FUNC;
-void xsettimeofday(const struct timeval *tv) FAST_FUNC;
 
 
 int xsocket(int domain, int type, int protocol) FAST_FUNC;
