@@ -298,11 +298,13 @@ static void ALWAYS_INLINE remove_and_free_to_net(pty_to_net_t *ts)
 //    netfd = -1; //no longer try to read
 //    return 0; //but do not detach yet
 
-static unsigned char read_byte_unescaping_IAC(unsigned char **pp)
+static unsigned char read_byte_unescaping_IAC(int *iac_cnt, unsigned char **pp)
 {
 	unsigned char c = *(*pp)++;
-	if (c == IAC && **pp == IAC)
+	if (c == IAC && **pp == IAC) {
+		(*iac_cnt)++;
 		(*pp)++;  /* Skip the second IAC in IAC IAC sequence */
+	}
 	return c;
 }
 
@@ -399,39 +401,43 @@ static int net_to_pty__have_data_to_write(void *this)
 	}
 	if (buf[1] == SB) {
 		if (buf[2] == TELOPT_NAWS) {
-			/* IAC,SB,TELOPT_NAWS,<4 bytes possibly IAC-escaped>,IAC,SE */
-			struct winsize ws;
+			// IAC,SB,TELOPT_NAWS,<4 bytes possibly IAC-escaped>,IAC,SE
+			struct {
+				struct winsize ws;
+				int iac_cnt;
+			} s;
 			unsigned char *p;
 			unsigned char byte45, byte67, byte89;
 
-			/* The usual: IAC,SB,TELOPT_NAWS,w,w,h,h (IAC,SE later): 7 + 2 = 9 bytes
-			 * The worst: IAC,SB,TELOPT_NAWS,w,w,w,w,h,h,h,h (all w,h are IACs): 11 bytes
-			 * We can't check for size < 11:
-			 * will mishandle IAC,SB,TELOPT_NAWS,w,w,h,h,IAC,SE,'A' (10 bytes)
-			 * the write of 'A' (ordinary visible char) can be delayed!
-			 */
-			if (size < 9) /* postpone parsing until have 9+ bytes */
+			// The usual: IAC,SB,TELOPT_NAWS,w,w,h,h (IAC,SE later): 7 + 2 = 9 bytes
+			// 255*HH:    IAC,SB,TELOPT_NAWS,0,255,255,h,h: 8 bytes (10 with IAC,SE)
+			// The worst: IAC,SB,TELOPT_NAWS,w,w,w,w,h,h,h,h (four IACs): 11 bytes (not counting IAC,SE)
+			// We can't simply check for size < 11:
+			// will mishandle IAC,SB,TELOPT_NAWS,w,w,h,h,IAC,SE,'A' (10 bytes)
+			// the write of 'A' (ordinary visible char) can be delayed!
+			// Also mishandles 255*HH case (10 bytes) by delaying its processing
+			// until at least one more byte after it is received and size becomes >= 11.
+			if (size < 9) // postpone parsing until have 9+ bytes
 				goto cant_write;
-			memset(&ws, 0, sizeof(ws)); /* pixel sizes are set to 0 */
+			memset(&s, 0, sizeof(s)); // pixel sizes are set to 0
+			//s.iac_cnt = 0; //done
 			p = buf + 3;
-			byte45 = read_byte_unescaping_IAC(&p);
-			byte67 = read_byte_unescaping_IAC(&p);
-			byte89 = read_byte_unescaping_IAC(&p); /* fetches _at most_ byte#9 - allowed by size */
-			/* If any one of these is IAC, the NAWS seq must be at least 10 bytes.
-			 * IOW: it can't be case 'A' above. *Can* postpone if size == 10!
-			 */
-			if (byte45 == 0xff || byte67 == 0xff || byte89 == 0xff)
-				if (size < 11) /* postpone parsing until have 11+ bytes */
-					goto cant_write;
-			ws.ws_col = (byte45 << 8) | byte67;
-			ws.ws_row = (byte89 << 8) | read_byte_unescaping_IAC(&p); /* fetches _at most_ byte#11 */
+			byte45 = read_byte_unescaping_IAC(&s.iac_cnt, &p);
+			byte67 = read_byte_unescaping_IAC(&s.iac_cnt, &p);
+			byte89 = read_byte_unescaping_IAC(&s.iac_cnt, &p); // fetches at most byte#9 - allowed by size
+			// If any one of these is IAC, the NAWS seq must be at least 10 bytes.
+			// IOW: it can't be case 'A' above. *Can* postpone if size == 10!
+			if (size < 9 + s.iac_cnt) // if IAC was seen: postpone parsing until have 10+ bytes
+				goto cant_write;  // if 2+ IACs seen: postpone parsing until have 11+ bytes
+			s.ws.ws_col = (byte45 << 8) | byte67;
+			s.ws.ws_row = (byte89 << 8) | read_byte_unescaping_IAC(&s.iac_cnt, &p); // fetches _at most_ byte#11 (if four IACs)
 
-			if (ws.ws_col != 0 && ws.ws_row != 0) /* don't provoke bugs elsewhere with "zero-sized screen" */
-				ioctl(ts->write_fd, TIOCSWINSZ, (char *)&ws);
-			log1("pfd:%d window size:%dx%d", ts->write_fd, ws.ws_row, ws.ws_col);
+			if (s.ws.ws_col != 0 && s.ws.ws_row != 0) // don't provoke bugs elsewhere with "zero-sized screen"
+				ioctl(ts->write_fd, TIOCSWINSZ, (char *)&s.ws);
+			log1("pfd:%d window size:%dx%d", ts->write_fd, s.ws.ws_row, s.ws.ws_col);
 			increment = p - buf;
 			goto inc;
-			/* trailing IAC,SE will be eaten separately, as 2-byte NOP */
+			// trailing IAC,SE will be eaten separately, as 2-byte NOP
 		}
 //fixme: skip them correctly
 		/* else: other subnegs not supported yet */
