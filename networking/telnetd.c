@@ -127,6 +127,7 @@
 //usage:     "\n	-S		Log to syslog (implied by -i or without -F and -w)"
 //usage:	)
 //usage:	)
+//usage:     "\n	-v		Verbose"
 
 #include "libbb.h"
 #include "common_bufsiz.h"
@@ -172,6 +173,7 @@ struct globals {
 	ioloop_state_t io;
 	const char *loginpath;
 	const char *issuefile;
+	unsigned verbose;
 	IF_FEATURE_TELNETD_INETD_WAIT(unsigned sec_linger;)
 } FIX_ALIASING;
 #define G (*(struct globals*)bb_common_bufsiz1)
@@ -180,6 +182,34 @@ struct globals {
 	G.loginpath = "/bin/login"; \
 	G.issuefile = "/etc/issue.net"; \
 } while (0)
+
+#define log1(...) do { if (G.verbose) bb_error_msg(__VA_ARGS__); } while (0)
+
+static NOINLINE void fabricate_ctrl_D_on_pty(int fd)
+{
+	struct termios tio;
+	// Master pty can see slave's termios - abuse that
+	if (tcgetattr(fd, &tio) != 0) {
+		dbg_close("%s: no termios(%d)", __func__, fd);
+		return;
+	}
+	dbg_close("%s: termios(%d) ICANON:%d,VEOF:%02x", __func__,
+		fd, !!(tio.c_lflag & ICANON), (uint8_t)tio.c_cc[VEOF]);
+	if ((tio.c_lflag & ICANON) && tio.c_cc[VEOF] != 0) {
+		// _Should_ look like EOF on input on the slave side...
+		write(fd, &tio.c_cc[VEOF], 1); // usually ^D
+		// One ^D often won't do. If a program was blocked on read already,
+		// ^D makes _that_ read return:
+		//  read(0, "some data", 64) = 9
+		// but the program will likely read more
+		// (it did not interpret above as EOF), block, and die:
+		//  read(0, 0x123456, 64) = ...<blocked>... -1 EIO
+		//  +++ killed by SIGHUP +++
+		// Well, I'm not greedy...
+		write(fd, &tio.c_cc[VEOF], 1); // here is another EOF for you
+		// If this doesn't work, they can see 0x04 bytes. Tough cookies
+	}
+}
 
 #define TELNET_CONNECTION \
 	STRUCT_CONNECTION \
@@ -248,7 +278,7 @@ static void ALWAYS_INLINE remove_and_free_to_net(pty_to_net_t *ts)
 
 // Theory of operation
 // (AKA "when should I close fds? when should I detach from ioloop?").
-// The fds are named read)fs and write_fd, but for clarity let's call them netfd and ptyfd.
+// The fds are named read_fs and write_fd, but for clarity let's call them netfd and ptyfd.
 // net_to_pty::have_data_to_write
 // net_to_pty::have_buffer_to_read_into
 //  if ptyfd < 0: //sibling told us ptyfd is down?
@@ -281,7 +311,6 @@ static int net_to_pty__have_data_to_write(void *this)
 	size = ts->size;
 	if (size == 0)
 		return 0;
-
 
 	buf = BUF2PTY(ts) + ts->wridx;
 	if (ts->skip_LF_or_NUL) {
@@ -369,6 +398,7 @@ static int net_to_pty__have_data_to_write(void *this)
 			ws.ws_col = (buf[3] << 8) | buf[4];
 			ws.ws_row = (buf[5] << 8) | buf[6];
 //TODO: sanity check: are they nonzero?
+			log1("pfd:%d window size:%dx%d", ts->write_fd, ws.ws_row, ws.ws_col);
 			ioctl(ts->write_fd, TIOCSWINSZ, (char *)&ws);
 			increment = 7;
 			goto inc;
@@ -481,36 +511,35 @@ static int net_to_pty__have_buffer_to_read_into(void *this)
 	if (ts->read_fd < 0) { /* we've seen EOF/error on netfd */
 		dbg_close("EOF on netfd was seen, ts->size:%d", ts->size);
 		if (ts->size == 0) { /* we wrote everything */
-			if (!ts->sibling) { /* if not in use by sibling... */
-				/* close ptyfd, but after a pause */
-				unsigned rem;
+			unsigned rem;
+			/* close ptyfd, but after a 20 ms pause */
 
-				/* pty has a design problem: close(master_ptyfd)
-				 * is defined as causing hangup on slave pty.
-				 * Which discards all currently buffered unread data
-				 * (in our case, all data we just wrote).
-				 * usleep(1000) is a crude solution.
-				 * A better one (does not block other conns):
-				 */
-				dbg_close("going to close ptyfd:%d deadline_us:%u",
-						ts->write_fd, ts->deadline_us);
-				if (!ts->deadline_us) {
-					ts->deadline_us = (monotonic_us() + 1000) | 1;
-					rem = 1000;
-				} else {
-					rem = ts->deadline_us - monotonic_us();
-				}
-				dbg_close("until ptyfd_close:%d", rem);
-				if (rem <= 1000) {
-					ioloop_decrease_current_timeout(ts->io, rem);
-					return 0; /* "do not read" */
-				}
-				/* rem undeflowed (is "negative"): we waited at least 1000us */
-				dbg_close("EOF on netfd, closing ptyfd:%d", ts->write_fd);
-				close(ts->write_fd);
+			/* pty has a design problem: close(master_ptyfd)
+			 * is defined as causing hangup on slave pty.
+			 * Which discards all currently buffered unread data
+			 * (in our case, all data we just wrote).
+			 * usleep(20000) is a crude solution.
+			 * A better one (does not block other conns):
+			 */
+			dbg_close("going to close ptyfd:%d deadline_us:%u",
+					ts->write_fd, ts->deadline_us);
+			if (!ts->deadline_us) {
+				fabricate_ctrl_D_on_pty(ts->write_fd);
+				ts->deadline_us = (monotonic_us() + 20000) | 1;
+				rem = 20000;
+			} else {
+				rem = ts->deadline_us - monotonic_us();
 			}
-			ts->write_fd = -1;
-			remove_and_free_to_pty(ts);
+			dbg_close("until ptyfd_close:%d", rem);
+			if (rem <= 20000) {
+				ioloop_decrease_current_timeout(ts->io, rem);
+				return 0; /* "do not read" */
+			}
+			/* rem undeflowed (is "negative"): we waited at least 1000us */
+			dbg_close("EOF on netfd, closing ptyfd:%d", ts->write_fd);
+			if (ts->sibling)
+				ts->sibling->read_fd = -1;
+			remove_and_free_to_pty(ts); /* closes ts->write_fd (ptyfd) */
 			return -1; /* "don't use me anymore, I'm gone" */
 		}
 		return 0; /* "don't want to read" */
@@ -543,7 +572,7 @@ static int net_to_pty__read(void *this)
 		if (!ts->sibling)
 			close(ts->read_fd); /* close netfd if not in use by sibling */
 		ts->read_fd = -1;
-		return 0; /* "didn't read anything */
+		return 0; /* "didn't read anything" */
 	}
 
 	ts->size += count;
@@ -1591,13 +1620,14 @@ int telnetd_main(int argc UNUSED_PARAM, char **argv)
 			IF_FEATURE_TELNETD_SELFTEST_DEBUG("@")
 			"f:l:Ki"
 			IF_FEATURE_TELNETD_STANDALONE("p:b:F")
-			IF_FEATURE_TELNETD_INETD_WAIT("Sw:+") /* -w NUM */
+			IF_FEATURE_TELNETD_INETD_WAIT("Sw:+v") /* -w NUM */
 			"\0"
-			/* -w implies -F. -w and -i don't mix */
-			IF_FEATURE_TELNETD_INETD_WAIT("wF:i--w:w--i"),
-			&G.issuefile, &G.loginpath
+			/* -w implies -F. -w and -i don't mix. -v counter */
+			IF_FEATURE_TELNETD_INETD_WAIT("wF:i--w:w--i:vv")
+			, &G.issuefile, &G.loginpath
 			IF_FEATURE_TELNETD_STANDALONE(, &opt_portnbr, &opt_bindaddr)
 			IF_FEATURE_TELNETD_INETD_WAIT(, &G.io.max_timeout)
+			, &G.verbose
 	);
 
 #if ENABLE_FEATURE_TELNETD_SELFTEST_DEBUG
