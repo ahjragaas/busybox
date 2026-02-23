@@ -762,11 +762,13 @@ static ALWAYS_INLINE void ioloop_decrease_current_timeout(ioloop_state_t *io, un
 void FAST_FUNC ioloop_insert_conn(ioloop_state_t *io, connection_t *conn);
 void FAST_FUNC ioloop_remove_conn(ioloop_state_t *io, connection_t *conn);
 enum {
-	IOLOOP_FLAG_EXIT_IF_TIMEOUT       = (1 << 0),
+	IOLOOP_FLAG_EXIT_IF_TIMEOUT = (1 << 0),
+	IOLOOP_FLAG_EXIT_IF_EINTR   = (1 << 1),
 	//IOLOOP_FLAG_EXIT_IF_ALL_NOT_READY = (1 << 1),
 	/* ioloop_run return values */
 	IOLOOP_NO_CONNS = 0,
 	IOLOOP_TIMEOUT  = 1,
+	IOLOOP_EINTR    = 2,
 };
 int FAST_FUNC ioloop_run(ioloop_state_t *io);
 

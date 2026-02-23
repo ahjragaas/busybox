@@ -230,6 +230,8 @@ int FAST_FUNC ioloop_run(ioloop_state_t *io)
 		if (count == 0 && (io->flags & IOLOOP_FLAG_EXIT_IF_TIMEOUT))
 			return IOLOOP_TIMEOUT;
 		/* < 0: EINTR or ENOMEM */
+		if (count < 0 && (io->flags & IOLOOP_FLAG_EXIT_IF_EINTR) && errno == EINTR)
+			return IOLOOP_EINTR;
 		goto again;
 	}
 
