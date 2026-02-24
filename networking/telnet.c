@@ -52,20 +52,14 @@
 
 //kbuild:lib-$(CONFIG_TELNET) += telnet.o
 
-//usage:#if ENABLE_FEATURE_TELNET_AUTOLOGIN
 //usage:#define telnet_trivial_usage
-//usage:       "[-a] [-l USER] HOST [PORT]"
-//usage:#define telnet_full_usage "\n\n"
-//usage:       "Connect to telnet server\n"
-//usage:     "\n	-a	Automatic login with $USER variable"
-//usage:     "\n	-l USER	Automatic login as USER"
-//usage:
-//usage:#else
-//usage:#define telnet_trivial_usage
-//usage:       "HOST [PORT]"
+//usage:	IF_FEATURE_TELNET_AUTOLOGIN("[-a] [-l USER] ")"HOST [PORT]"
 //usage:#define telnet_full_usage "\n\n"
 //usage:       "Connect to telnet server"
-//usage:#endif
+//usage:	IF_FEATURE_TELNET_AUTOLOGIN("\n"
+//usage:     "\n	-a	Automatic login with $USER envvar"
+//usage:     "\n	-l USER	Automatic login as USER"
+//usage:	)
 
 #include <arpa/telnet.h>
 #include <netinet/in.h>
@@ -79,15 +73,24 @@
 # define DO          253  /* please, you use option */
 # define WONT        252  /* I won't use option */
 # define WILL        251  /* I will use option (if I see your "IAC DO <opt>" confirmation */
-# define SB          250  /* interpret as subnegotiation */
-# define SE          240  /* end sub negotiation */
+# define SB          250  /* begin subnegotiation */
+# define SE          240  /* end subnegotiation */
 # define TELOPT_ECHO   1  /* echo */
 # define TELOPT_SGA    3  /* suppress go ahead */
 # define TELOPT_TTYPE 24  /* terminal type */
 # define TELOPT_NAWS  31  /* window size */
 #endif
 
-#define DEBUG 0
+#define SUPPORT_FOR_LOCAL_OPTS (0 \
+	|| ENABLE_FEATURE_TELNET_WIDTH \
+	|| ENABLE_FEATURE_TELNET_TTYPE \
+	|| ENABLE_FEATURE_TELNET_AUTOLOGIN \
+	)
+
+// -v option
+#define VERBOSE 0
+// lots of unconditional debug
+#define DEBUG   0
 
 #if DEBUG
 # define dbg(...) bb_error_msg(__VA_ARGS__)
@@ -102,6 +105,14 @@ static char *bin_to_hex(const void *hash_value, unsigned hash_length)
 # define dbg(...) ((void)0)
 #endif
 
+#if VERBOSE
+# define log1(...) do { if (G.verbose) bb_error_msg(__VA_ARGS__); } while (0)
+# define IF_VERBOSE(...) __VA_ARGS__
+#else
+# define log1(...) ((void)0)
+# define IF_VERBOSE(...) /* nothing */
+#endif
+
 enum {
 	TS_NORMAL = 0,
 	TS_IAC  = 1,
@@ -110,7 +121,7 @@ enum {
 	TS_SUB2 = 4,
 	TS_CR   = 5,
 
-	MAX_NAWS_SIZE = 13, /* pathological 65535x65535 case needs full escaping */
+	MAX_NAWS_SIZE = 13, // pathological 65535x65535 case needs full escaping
 
 	netfd   = 3,
 };
@@ -144,45 +155,51 @@ static void set_input_state(net_to_stdout_t *conn, int new_state, int c)
 #endif
 
 struct globals {
-	unsigned flags;
-/* Set when server agreed to use NAWS: */
-#define FLAGS_NAWS_ON  (1 << 0)
-/* SGA option seen and responded to, no longer look for it: */
-#define FLAGS_SGA_SEEN (1 << 1)
-/* Seen telnet protocol from server and sent our wishes: */
-#define INITIAL_SENT   (1 << 2)
-#define DO_TERMIOS     (1 << 3)
+	unsigned        flags;
+// Set when server agreed to use NAWS:
+#define FLAGS_NAWS_ON   (1 << 0)
+// SGA option seen and responded to, no longer look for it:
+#define FLAGS_SGA_SEEN  (1 << 1)
+// Seen telnet protocol from server and sent our WILLs:
+#define INITIAL_SENT    (1 << 2)
+#define DO_TERMIOS      (1 << 3)
 
-	byte                word_aligned_bytes[2];
-#define changed             word_aligned_bytes[0]
+	byte            word_aligned_bytes[2];
+#define changed         word_aligned_bytes[0]
 #define CHANGED_ECHO        (1 << 0)
 #define CHANGED_NAWS        (1 << 1)
-/* These happen only once: */
+// These happen only once:
 #define CHANGED_SGA         (1 << 2)
 #define CHANGED_TTYPE       (1 << 3)
 #define CHANGED_NEW_ENVIRON (1 << 4)
-/* The second byte is changed async, by signal handler: */
-#define got_SIGWINCH        word_aligned_bytes[1]
-#define G_changed_word      (*(uint16_t*)G.word_aligned_bytes)
+// The second byte is changed async, by signal handler:
+#define got_SIGWINCH    word_aligned_bytes[1]
+#define G_changed_word  (*(uint16_t*)G.word_aligned_bytes)
 
 	byte            optstate_ECHO;
+#define OPT_ECHO_ON      1
+// We operate tty in rawmode only when echo ON (IOW: we saw server say that)
+#define OPT_ECHO_OFF     0
+#define OPT_ECHO_UNKNOWN 0xff /* on program start */
+
 	byte            echo_sga_response_size;
 
+	IF_VERBOSE(                 unsigned verbose;)
 	IF_FEATURE_TELNET_TTYPE(    const char *ttype;)
 	IF_FEATURE_TELNET_AUTOLOGIN(const char *autologin;)
-	ioloop_state_t io;
-	stdin_to_net_t conn_stdin2net;
+	ioloop_state_t  io;
+	stdin_to_net_t  conn_stdin2net;
 	net_to_stdout_t conn_net2stdout;
-	struct termios termios_def;
-	struct termios termios_raw;
+	struct termios  termios_def;
+	struct termios  termios_raw;
 // buf[] arrays in conn structs are conceptually cleaner, but they
 // make G.member offsets larger -> larger code
-#define BUF_TTY2NET ((byte*)bb_common_bufsiz1)
-#define BUF_NET2TTY G.buf2
-#define BUFSIZE     1024
-/* Note: can't just increase BUFSIZE arbitrarily: common bufsiz1 is not guaranteed to be >1k! */
-#define BUFMASK     (BUFSIZE - 1)
-	byte        buf2[BUFSIZE];
+#define BUF_TTY2NET     ((byte*)bb_common_bufsiz1)
+#define BUF_NET2TTY     G.buf2
+#define BUFSIZE         1024
+// Note: can't just increase BUFSIZE arbitrarily: common bufsiz1 is not guaranteed to be >1k!
+#define BUFMASK         (BUFSIZE - 1)
+	byte            buf2[BUFSIZE];
 } FIX_ALIASING;
 #define G (*ptr_to_globals)
 #define INIT_G() do { \
@@ -197,7 +214,8 @@ static int remaining_free_bytes(int n)
 #if ENABLE_FEATURE_TELNET_WIDTH
 static void handle_SIGWINCH(int sig UNUSED_PARAM)
 {
-	if (G.flags & FLAGS_NAWS_ON) /* Only if server okayed NAWS */
+	// Only if server said DO NAWS and seen our WILL NAWS:
+	if ((G.flags & (FLAGS_NAWS_ON|INITIAL_SENT)) == (FLAGS_NAWS_ON|INITIAL_SENT))
 		G.got_SIGWINCH = 1;
 }
 #endif
@@ -237,9 +255,7 @@ static void put_iac2_msb_lsb(unsigned x_y)
 }
 #define put_iac2_x_y(x,y) put_iac2_msb_lsb(((x)<<8) + (y))
 
-#if ENABLE_FEATURE_TELNET_WIDTH \
- || ENABLE_FEATURE_TELNET_TTYPE \
- || ENABLE_FEATURE_TELNET_AUTOLOGIN
+#if SUPPORT_FOR_LOCAL_OPTS
 static void put_iac4_msb_lsb(unsigned x_y_z_t)
 {
 	put_iac2_msb_lsb(x_y_z_t >> 16);
@@ -303,6 +319,7 @@ static void put_iac_naws(void)
 
 	/* Send width and height as 16-bit big-endian, escaping IAC bytes */
 	get_terminal_width_height(0, &width, &height);
+	log1("C:SB NAWS %dx%d", width, height);
 	put_iac_byte_escaped(width >> 8);
 	put_iac_byte_escaped(width);
 	put_iac_byte_escaped(height >> 8);
@@ -314,125 +331,175 @@ static void put_iac_naws(void)
 
 // Telnet option handling strategy:
 //
-// We send nothing on startup by our own (think "telnet www.kernel.org 80").
-// As soon as we see ECHO or SGA message, we respond to them and then
-// send "IAC WILL NAWS", "IAC WILL TTYPE", "IAC WILL NEW_ENVIRON"
+// We send nothing on startup on our own (think "telnet www.kernel.org 80").
+// As soon as we see any DO X or WILL X message known to us, we respond
+// to them: send DO/DONT ECHO, DO SGA if server talked about them, then send
+// WILL NAWS, WILL TTYPE, WILL NEW_ENVIRON
 // without waiting for server to advertise those options.
-// (Why? servers may decide to not advertise all 123 options they know).
+// (Why? Some servers may decide to not advertise all 123 options they know).
 //
 // TELOPT_ECHO (1) - remote: server echoes our keystrokes back to us
-// - Server says: "IAC WILL ECHO" or "IAC WONT ECHO"
+// - Server says: WILL ECHO or WONT ECHO
 // - If we don't see it, or see WONT: line mode (local terminal echoes), aka cooked mode
 // - When active: We're in character mode (server echoes), aka raw mode
 // - Response logic:
-//   - Server says WILL ECHO: we send "IAC DO ECHO", enter raw mode
-//     (this is the most usual case for non-ancient servers)
-//   - Server says WONT ECHO: we send "IAC DONT ECHO", enter cooked mode
-//   - We mirror server's changes, we do allow it to change during session
-//     unlike one-shot options which are negotiated once during startup.
-//   - If user changes mode from ^] menu, we send corresponding "IAC DO/DONT ECHO".
+// - Server says WILL ECHO: we send DO ECHO, enter raw mode
+//   (this is the most usual case for non-ancient servers)
+// - Server says WONT ECHO: we send DONT ECHO, enter cooked mode
+// - We mirror server's changes, we do allow it to change during session
+//   unlike one-shot options which are negotiated once during startup.
+// - If user changes mode from ^] menu, we send corresponding DO/DONT ECHO.
 //
 // TELOPT_SGA (3) - remote: "Suppress Go Ahead", full-duplex
-// - Server says: "IAC WILL SGA" or "IAC WONT SGA"
+// - Server says: WILL SGA or WONT SGA
 // - Response logic: one-shot.
-//   - We expect all sane servers to say "IAC WILL SGA" at startup.
-//   - If that happens, we send "IAC DO SGA". After that, we never react to any
-//     further SGA messages (we expect them to not happen in practice)
+// - We expect all sane servers to choose WILL SGA at startup.
+// - If that happens, we send DO SGA. After that, we never react to any
+//   further SGA messages (we expect them to not repeat in practice)
 //
 // TELOPT_NAWS (31) - Window Size - local: we send our window size
-// - If server says: "IAC DO NAWS", it understands NAWS. We check this.
+// - If server says: DO NAWS, it understands NAWS. We require this before
+// - sending SB NAWS ...
 // - We send window size during initial handshake and on window resize
 //
 // TELOPT_TTYPE (24) - Terminal Type - local: we send our terminal type
 // - Response logic: one-shot.
-//   - If server says DO TTYPE: send "IAC SB TTYPE 0 <$TERM> IAC SE"
+// - If server says DO TTYPE: send "IAC SB TTYPE 0 '$TERM' IAC SE"
 //
 // TELOPT_NEW_ENVIRON (39) - Environment (Autologin) - local: we send our username
 // - Response logic: one-shot.
-//   - If server says DO NEW_ENVIRON: send "IAC SB NEW_ENVIRON IS VAR USER VALUE <name> IAC SE"
+// - If server says DO NEW_ENVIRON: send "IAC SB NEW_ENVIRON IS VAR 'USER' VALUE 'name' IAC SE"
 //
 // Unknown options:
 // Response: NONE - just ignore them
 // By protocol definition, an option is not in effect until BOTH sides agree.
 // We don't respond to unknown options - they simply won't be in effect.
+//
+// Testing at discworld.atuin.net:23 reveal servers often do NOT negotiate ECHO/SGA
+// in initial handshake while supporting NAWS and TTYPE:
+//telnet: S:DO 24 <--TTYPE
+//telnet: TTYPE:'xterm-256color' setting CHANGED_TTYPE
+//LPmud version : DW OS v1.02 on port 4242.
+//telnet: changed:8 flags:8
+//telnet: C:SB TTYPE 'xterm-256color'
+//telnet: S:DO 31 <--NAWS
+//telnet: S:WILL 86
+//telnet: S:DO 91
+//telnet: S:WILL 70
+//telnet: S:WILL 93
+//telnet: S:DO 39
+//telnet: S:WILL 201
+//......text.....
+//telnet: changed:2 flags:8
+//telnet: C:SB NAWS 226x53
+//...text....
+//telnet: S:SB 24 <--TTYPE
+//...text....
+//Setting your network terminal type to "xterm-256color".
+//> cols
+//Columns currently set to 79.
+//> rows
+//Rows currently set to 24.
+//^^^ server understood TTYPE but not NAWS. ?!
 static void handle_changes_in_options(stdin_to_net_t *conn)
 {
 	int count;
 
-	//bb_error_msg("changed:%x flags:%x", G.changed, G.flags);
+	log1("changed:%x flags:%x", G.changed, G.flags);
 
 	count = remaining_free_bytes(conn->size);
-	/* As soon as we see either ECHO or SGA from server,
-	 * we assume it *is* a telnet server
-	 * (not in "telnet www.kernel.org 80" scenario),
-	 * and we respond to them, also expressing our own
-	 * wishes: "WILL NAWS" etc.
-	 */
-	if ((G.changed & (CHANGED_ECHO|CHANGED_SGA))
+	// As soon as we see any DO/DONT/WILL/WONT known to us,
+	// we assume it *is* a telnet server
+	// (we are not in "telnet www.kernel.org 80" scenario),
+	// and we respond to them, also expressing our own
+	// wishes: WILL NAWS etc. We send our WILLs once, all of them.
+	// We send actual SB with option contents after WILLs
+	// only if that option was requested.
+	// We repeatedly send only NAWS (when our window changes).
+	// Repeated DO requests are ignored.
+	if (G.changed
 	 && (count >= G.echo_sga_response_size)
 	) {
 		if (G.changed & CHANGED_ECHO) {
-			/* Server said WILL/WONT - confirm */
+			// Server said WILL/WONT ECHO - confirm every time
+			log1("C:%s ECHO", G.optstate_ECHO ? "DO" : "DONT");
 			put_iac3_IAC_x_y(G.optstate_ECHO ? DO : DONT, TELOPT_ECHO);
 		}
 		if (G.changed & CHANGED_SGA) {
-			/* Server said WILL - send DO */
+			// Server said WILL SGA - confirm once
+			log1("C:DO SGA");
 			put_iac3_IAC_x_y(DO, TELOPT_SGA);
-			G.flags |= FLAGS_SGA_SEEN; /* remember we did it */
+			G.flags |= FLAGS_SGA_SEEN; // remember we did it
 			G.changed -= CHANGED_SGA;
 		}
 		G.changed &= ~(CHANGED_ECHO|CHANGED_SGA);
 
 		if (!(G.flags & INITIAL_SENT)) {
+			// From now on, we'll only do DO/DONT ECHO and maybe DO SGA
+			// in the "if (G.changed)" block.
 			G.flags |= INITIAL_SENT;
-			G.echo_sga_response_size = 6; /* from now on, we'll need only 6 */
+			G.echo_sga_response_size = (G.flags & FLAGS_SGA_SEEN) ? 3 : 6;
 
-			/* Send initial IAC sequences for local options we want to advertise */
+			// Send initial IAC sequences for local options we want to advertise
+			// (there may be servers which send DO X only after we say WILL X)
 #if ENABLE_FEATURE_TELNET_WIDTH
+			log1("C:WILL %s", "NAWS");
 			put_iac3_IAC_x_y(WILL, TELOPT_NAWS);
 #endif
 #if ENABLE_FEATURE_TELNET_TTYPE
-			if (G.ttype)
+			if (G.ttype) {
+				log1("C:WILL %s", "TTYPE");
 				put_iac3_IAC_x_y(WILL, TELOPT_TTYPE);
+			}
 #endif
 #if ENABLE_FEATURE_TELNET_AUTOLOGIN
-			if (G.autologin)
+			if (G.autologin) {
+				log1("C:WILL %s", "NEW_ENVIRON");
 				put_iac3_IAC_x_y(WILL, TELOPT_NEW_ENVIRON);
+			}
 #endif
 		}
 	}
 
+	// If any of the checks below are true, then we know we
+	// went through INITIAL_SENT code path above.
+	// Therefore we always send WILL X before SB X...
 #if ENABLE_FEATURE_TELNET_WIDTH
 	if (remaining_free_bytes(conn->size) > MAX_NAWS_SIZE) {
 		if (G.changed & CHANGED_NAWS) {
-			G.flags |= FLAGS_NAWS_ON; /* remember we did it */
+			G.flags |= FLAGS_NAWS_ON; // remember we did it
 			G.changed -= CHANGED_NAWS;
 			goto generate_naws;
 		}
-		/* Handle window resize: send updated NAWS if we have room */
+		// Handle window resize: send updated NAWS
 		if (G.got_SIGWINCH) {
+			// we know that INITIAL_SENT is set, signal handler checks that
  generate_naws:
+			// Clear the flag before put_iac_naws() to avoid race
 			G.got_SIGWINCH = 0;
-			/* Clear the flag before put_iac_naws() to avoid race! */
+//log1("C:WILL %s", "NAWS, the second time, I'm telling you it's fine!");
+//put_iac3_IAC_x_y(WILL, TELOPT_NAWS);
 			put_iac_naws();
 		}
 	}
 #endif
 #if ENABLE_FEATURE_TELNET_TTYPE
 	if ((G.changed & CHANGED_TTYPE)
-	 && remaining_free_bytes(conn->size) > 2 * strlen(G.ttype)
+	 && remaining_free_bytes(conn->size) > 6 + 2 * strlen(G.ttype)
 	) {
+		log1("C:SB %s '%s'", "TTYPE", G.ttype);
 		put_iac_subopt(TELOPT_TTYPE, G.ttype);
-		G.ttype = NULL; /* remember we did it */
+		G.ttype = NULL; // remember we did it
 		G.changed -= CHANGED_TTYPE;
 	}
 #endif
 #if ENABLE_FEATURE_TELNET_AUTOLOGIN
 	if ((G.changed & CHANGED_NEW_ENVIRON)
-	 && remaining_free_bytes(conn->size) > 2 * strlen(G.autologin)
+	 && remaining_free_bytes(conn->size) > 12 + 2 * strlen(G.autologin)
 	) {
+		log1("C:SB %s '%s'", "NEW_ENVIRON", G.autologin);
 		put_iac_subopt_autologin(G.autologin);
-		G.autologin = NULL; /* remember we did it */
+		G.autologin = NULL; // remember we did it
 		G.changed -= CHANGED_NEW_ENVIRON;
 	}
 #endif
@@ -477,20 +544,19 @@ static void show_menu(void)
 
 	switch (b) {
 	case 'l':
-		if (G.optstate_ECHO) {
-			G.optstate_ECHO = 0;
-			if (G.flags & INITIAL_SENT)
-				G.changed |= CHANGED_ECHO; /* inform the server at next send */
+		if (G.optstate_ECHO == OPT_ECHO_ON) { /* are we in rawmode? */
+			G.optstate_ECHO = OPT_ECHO_OFF;
 			announce_and_switch_to_cookmode();
-			return;
+			goto echo_changed;
 		}
 		break;
 	case 'c':
-		if (!G.optstate_ECHO) {
-			G.optstate_ECHO = 1;
+		if (G.optstate_ECHO != OPT_ECHO_ON) { /* OFF or UNKNOWN? (both operate as linemode) */
+			G.optstate_ECHO = OPT_ECHO_ON;
+			announce_rawmode(); /* no "_and_switch_": we are already in rawmode */
+ echo_changed:
 			if (G.flags & INITIAL_SENT)
 				G.changed |= CHANGED_ECHO; /* inform the server at next send */
-			announce_rawmode(); /* no "_and_switch_": we are already in rawmode */
 			return;
 		}
 		break;
@@ -503,7 +569,7 @@ static void show_menu(void)
 
 	full_write1_str("continuing...\r\n");
 
-	if (!G.optstate_ECHO)
+	if (G.optstate_ECHO != OPT_ECHO_ON)
 		cookmode();
 }
 
@@ -722,7 +788,8 @@ static int read_from_net(void *this)
 			} else if (c == SB) {
 				conn->negotiation_verb = 0xff; /* reuse as counter */
 				SET_INPUT_STATE(conn, TS_SUB1, c);
-			} else if (c == DO || c == DONT || c == WILL || c == WONT) {
+				log1("S:SB %d", count ? *src : 0);
+			} else if (c == WILL || c == WONT || c == DO || c == DONT) { /* 251-254 */
 				conn->negotiation_verb = c;
 				SET_INPUT_STATE(conn, TS_OPT, c);
 			} else {
@@ -732,6 +799,12 @@ static int read_from_net(void *this)
 			break;
 
 		case TS_OPT:
+#if VERBOSE
+			{
+				static const char verbs[] ALIGN1 = "WILL\0""WONT\0""DO\0""DONT";
+				log1("S:%s %d", nth_string(verbs, conn->negotiation_verb - WILL), c);
+			}
+#endif
 			/* Process option negotiation */
 			will = (conn->negotiation_verb == WILL);
 			if (will || conn->negotiation_verb == WONT) {
@@ -748,6 +821,7 @@ static int read_from_net(void *this)
 				switch (c) {
 #if ENABLE_FEATURE_TELNET_TTYPE
 				case TELOPT_TTYPE: /* Local option: we send terminal type */
+					log1("TTYPE:'%s' %ssetting CHANGED_TTYPE", G.ttype, G.ttype ? "" : "not ");
 					if (G.ttype)
 						G.changed |= CHANGED_TTYPE;
 					break;
@@ -775,7 +849,7 @@ static int read_from_net(void *this)
 			 * if IAC SE is never seen (buggy server response?).
 			 */
 			if (--conn->negotiation_verb == 0) {
-				dbg("unterminated SB seen");
+				log1("unterminated SB (server bug?)");
 				SET_INPUT_STATE(conn, TS_NORMAL, c);
 			} else
 			/* Skip over subnegotiation bytes until we see IAC */
@@ -801,7 +875,7 @@ static int read_from_net(void *this)
 		/* Tell net writer to generate a confirmation */
 		G.changed |= CHANGED_ECHO;
 		/* Print the banner and set termios */
-		if (G.optstate_ECHO)
+		if (G.optstate_ECHO == OPT_ECHO_ON)
 			announce_and_switch_to_rawmode();
 		else
 			announce_and_switch_to_cookmode();
@@ -859,30 +933,35 @@ int telnet_main(int argc UNUSED_PARAM, char **argv)
 {
 	char *host;
 	int port;
+	int opts;
 
 	INIT_G();
 
 #if ENABLE_FEATURE_TELNET_TTYPE
 	G.ttype = getenv("TERM");
 #endif
+	opts = getopt32(argv, ""IF_VERBOSE("^")
+		IF_FEATURE_TELNET_AUTOLOGIN("al:")IF_VERBOSE("v")
+		IF_VERBOSE("\0" "vv")
+		IF_FEATURE_TELNET_AUTOLOGIN(, &G.autologin)
+		IF_VERBOSE(, &G.verbose)
+	);
 #if ENABLE_FEATURE_TELNET_AUTOLOGIN
-	if (1 == getopt32(argv, "al:", &G.autologin)) {
-		/* Only -a without -l USER picks $USER from envvar */
+	if ((opts & 3) == 1) {
+		// -a without -l USER picks USER from envvar:
 		G.autologin = getenv("USER");
 	}
-	argv += optind;
-#else
-	argv++;
 #endif
+	argv += optind;
 	if (!*argv)
 		bb_show_usage();
 	host = *argv++;
 	port = *argv ? bb_lookup_port(*argv++, "tcp", 23)
 		: bb_lookup_std_port("telnet", "tcp", 23);
-	if (*argv) /* extra params?? */
+	if (*argv) // extra params??
 		bb_show_usage();
 
-	/* Save our termios */
+	// Save our termios
 	if (tcgetattr(0, &G.termios_def) >= 0) {
 		G.flags |= DO_TERMIOS;
 		G.termios_raw = G.termios_def;
@@ -899,10 +978,10 @@ int telnet_main(int argc UNUSED_PARAM, char **argv)
 	signal(SIGWINCH, handle_SIGWINCH);
 #endif
 	signal(SIGINT, record_signo);
-	/* Without this, SIGPIPE was seen on loopback connections: */
+	// Without this, SIGPIPE was seen on loopback connections:
 	signal(SIGPIPE, SIG_IGN);
 
-	/* Initialize connections */
+	// Initialize connections
 	G.conn_stdin2net.have_buffer_to_read_into = have_buffer_to_read_from_stdin;
 	G.conn_stdin2net.have_data_to_write = have_data_to_write_to_net;
 	G.conn_stdin2net.read = read_from_stdin;
@@ -924,18 +1003,20 @@ int telnet_main(int argc UNUSED_PARAM, char **argv)
 	ioloop_insert_conn(&G.io, (connection_t*)&G.conn_net2stdout);
 
 	G.echo_sga_response_size = 3 * (2
-		+ ENABLE_FEATURE_TELNET_WIDTH
+		IF_FEATURE_TELNET_WIDTH( + 1)
 		IF_FEATURE_TELNET_TTYPE(+ !!G.ttype)
 		IF_FEATURE_TELNET_AUTOLOGIN(+ !!G.autologin)
 	);
-#if DEBUG
-	/* Terminal can change to raw mode, fix line printing */
+	// Make *any* ECHO negotiation from server, positive or negative,
+	// trigger "we have a change" logic:
+	G.optstate_ECHO = OPT_ECHO_UNKNOWN;
+#if DEBUG || VERBOSE
+	// Terminal can change to raw mode, fix line printing
 	msg_eol = "\r\n";
 #endif
-	/* EINTR flag and looping is only needed to handle ^C
-	 * in line mode, otherwise just a call to ioloop_run() would do.
-	 * TODO: replace primitive line mode with read_line_input()!!!
-	 */
+	// EINTR flag and looping is only needed to handle ^C
+	// in line mode, otherwise just a call to ioloop_run() would do.
+	// TODO: replace primitive line mode with read_line_input()!!!
 	G.io.flags |= IOLOOP_FLAG_EXIT_IF_EINTR;
 	for (;;) {
 		int rc = ioloop_run(&G.io);
