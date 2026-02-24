@@ -9,6 +9,12 @@
 //kbuild:lib-$(CONFIG_PSCAN) += bb_get_servname_by_port.o
 #include "libbb.h"
 
+//Rationale for exising:
+//#define getservbyport dont_use_getservbyport_uses_global_buffer
+//(for example: -280 bytes on musl, x86-32)
+//TODO:
+//avoid getservbyname() as well
+
 char* FAST_FUNC bb_get_servname_by_port(char **p_etc_services, int port, const char *type)
 {
 	char *sp;
@@ -22,23 +28,27 @@ char* FAST_FUNC bb_get_servname_by_port(char **p_etc_services, int port, const c
 		*p_etc_services = sp;
 	}
 	while (*sp) {
-		const char *portstr, *sp_end;
+		const char *pnstr, *sp_end;
 		char *end;
-		unsigned portnum;
+		unsigned n;
 
 		sp = skip_whitespace(sp);
 		if (*sp == '#')
 			goto next;
 		sp_end = skip_non_whitespace(sp);
-		portstr = skip_whitespace(sp_end);
-		portnum = bb_strtou(portstr, &end, 10);
-		if (portnum != port || *end != '/')
+		pnstr = skip_whitespace(sp_end);
+		n = bb_strtou(pnstr, &end, 10);
+		if (n != port || *end != '/')
 			goto next;
 		if (type) {
 			end++;
 			end = is_prefixed_with(end, type);
-			if (!end || !(isspace(*end) || *end == '\0'))
+			if (!end
+			 || !(isspace(*end) || *end == '\0'
+			    || *end == '#') // glibc treats "http 80/tcp#COMMENT" as valid
+			) {
 				goto next;
+			}
 		}
 		return auto_string(xstrndup(sp, sp_end - sp));
  next:

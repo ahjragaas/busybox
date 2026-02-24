@@ -176,7 +176,7 @@ struct globals {
 	smallint prg_cache_loaded;
 	struct prg_node *prg_hash[PRG_HASH_SIZE];
 #endif
-	char **p_etc_services;
+	char *p_etc_services;
 #if ENABLE_FEATURE_NETSTAT_PRG
 	const char *progname_banner;
 #endif
@@ -382,7 +382,7 @@ static const char *get_sname(int port, const char *proto, int numeric)
 	if (port == 0)
 		return "*";
 	if (!numeric) {
-		const char *se = bb_get_servname_by_port(G.p_etc_services, port, proto);
+		const char *se = bb_get_servname_by_port(&G.p_etc_services, port, proto);
 		if (se)
 			return se;
 	}
