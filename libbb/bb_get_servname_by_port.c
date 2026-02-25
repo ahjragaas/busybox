@@ -9,11 +9,9 @@
 //kbuild:lib-$(CONFIG_PSCAN) += bb_get_servname_by_port.o
 #include "libbb.h"
 
-//Rationale for exising:
+//Rationale for existing:
 //#define getservbyport dont_use_getservbyport_uses_global_buffer
 //(for example: -280 bytes on musl, x86-32)
-//TODO:
-//avoid getservbyname() as well
 
 char* FAST_FUNC bb_get_servname_by_port(char **p_etc_services, int port, const char *type)
 {
@@ -45,7 +43,7 @@ char* FAST_FUNC bb_get_servname_by_port(char **p_etc_services, int port, const c
 			end = is_prefixed_with(end, type);
 			if (!end
 			 || !(isspace(*end) || *end == '\0'
-			    || *end == '#') // glibc treats "http 80/tcp#COMMENT" as valid
+			    || *end == '#') // glibc treats "http 80/tcp#COMMENT" (no space!) as valid
 			) {
 				goto next;
 			}

@@ -911,9 +911,11 @@ char* xmalloc_sockaddr2hostonly_noport(const struct sockaddr *sa) FAST_FUNC RETU
 /* inet_[ap]ton on steroids */
 char* xmalloc_sockaddr2dotted(const struct sockaddr *sa) FAST_FUNC RETURNS_MALLOC;
 char* xmalloc_sockaddr2dotted_noport(const struct sockaddr *sa) FAST_FUNC RETURNS_MALLOC;
-// NB: unlike getservbyport, port parameter is NOT in network order
+// NB: unlike getservbyport, port parameter/retval are in host, NOT network order!
 #define getservbyport dont_use_getservbyport_uses_global_buffer
 char* bb_get_servname_by_port(char **p_etc_services, int port, const char *type) FAST_FUNC RETURNS_MALLOC;
+#define getservbyname dont_use_getservbyname_uses_global_buffer
+int bb_get_servport_by_name(char **p_etc_services, const char *name, const char *type) FAST_FUNC;
 // "old" (ipv4 only) API
 // users: traceroute.c hostname.c - use _list_ of all IPs
 struct hostent *xgethostbyname(const char *name) FAST_FUNC;
