@@ -469,7 +469,7 @@ static int at_end(void)
  */
 static void read_lines(void)
 {
-	int ndelay_set, fdflags;
+	int ndelay_set, eagain, fdflags;
 	char *current_line, *p;
 	int w = width;
 	char last_terminated = terminated;
@@ -502,7 +502,8 @@ static void read_lines(void)
 	// "less FILE": can set O_NONBLOCK on open.
 	// "true | less": can't.
 	// " { less; cat; } <FILE": can't. And must not confuse cat.
-	ndelay_set = -1; // "don't know whetherstdin is nonblocking"
+	ndelay_set = -1; // "don't know whether stdin is nonblocking"
+	eagain = 0;
 
 	while (1) { /* read lines until we reach cur_fline or wanted_match */
 		*p = '\0';
@@ -525,13 +526,13 @@ static void read_lines(void)
 				// This has the effect that e.g. PageDown on a regular file
 				// where we already reached EOF *will try reading anyway*,
 				// if the file is a growing log file, less *will* show the new data.
-				G.eof_error_ok = safe_read(STDIN_FILENO, readbuf, COMMON_BUFSIZE);
 				readpos = 0;
+				G.eof_error_ok = safe_read(STDIN_FILENO, readbuf, COMMON_BUFSIZE);
 				read_size = G.eof_error_ok;
 				if (G.eof_error_ok <= 0) {
-					read_size = 0; // -1 would be seen as UINT_MAX, prevent
 					if (G.eof_error_ok < 0 && errno == EAGAIN)
-						G.eof_error_ok = 1; // "neither EOF nor error"
+						eagain = 1;
+					read_size = 0; // -1 would be seen as UINT_MAX, prevent
 					goto reached_eof;
 				}
 			}
@@ -626,8 +627,13 @@ static void read_lines(void)
 				break;
 #endif
 		}
-		if (G.eof_error_ok <= 0) /* EOF or error? */
+		if (G.eof_error_ok <= 0) { /* EOF or error? */
+			if (eagain) {
+				G.eof_error_ok = 1; // "neither EOF nor error: stdin not ready"
+				//^^^ needed to make main loop's poll() check stdin
+			}
 			break;
+		}
 		max_fline++;
 		current_line = ((char*)xmalloc(w + 5)) + 4;
 		p = current_line;
