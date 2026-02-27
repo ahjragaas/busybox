@@ -201,8 +201,8 @@ struct globals {
 #if ENABLE_FEATURE_LESS_WINCH
 	unsigned winch_counter;
 #endif
-	int stdin_GETFL_flags;
-	ssize_t eof_error; /* eof if 0, error if < 0, > 0 if last read got some chars */
+	smallint ndelay_set;
+	ssize_t eof_error_ok; /* eof if 0, error if < 0, > 0 if last read did not indicate either */
 	size_t readpos;
 	size_t read_size;
 	const char **buffer;
@@ -252,7 +252,6 @@ struct globals {
 #define winch_counter       (G.winch_counter     )
 /* This one is 100% not cached by compiler on read access */
 #define WINCH_COUNTER (*(volatile unsigned *)&winch_counter)
-#define eof_error           (G.eof_error         )
 #define readpos             (G.readpos           )
 #define read_size           (G.read_size         )
 #define buffer              (G.buffer            )
@@ -282,7 +281,7 @@ struct globals {
 	less_gets_pos = -1; \
 	empty_line_marker = "~"; \
 	current_file = 1; \
-	eof_error = 1; \
+	G.eof_error_ok = 1; \
 	terminated = 1; \
 	IF_FEATURE_LESS_REGEXP(wanted_match = -1;) \
 } while (0)
@@ -463,13 +462,14 @@ static int at_end(void)
  * readbuf[readpos] - next character to add to current line.
  * last_line_pos - screen line position of next char to be read
  *      (takes into account tabs and backspaces)
- * eof_error - < 0 error, == 0 EOF, > 0 not EOF/error
+ * G.eof_error_ok - < 0 error, == 0 EOF, > 0 not EOF/error
  *
  * "git log -p | less -m" on the kernel git tree is a good test for EAGAINs,
  * "/search on very long input" and "reaching max line count" corner cases.
  */
 static void read_lines(void)
 {
+	int ndelay_set, fdflags;
 	char *current_line, *p;
 	int w = width;
 	char last_terminated = terminated;
@@ -498,6 +498,12 @@ static void read_lines(void)
 		last_line_pos = 0;
 	}
 
+	// Consider these cases:
+	// "less FILE": can set O_NONBLOCK on open.
+	// "true | less": can't.
+	// " { less; cat; } <FILE": can't. And must not confuse cat.
+	ndelay_set = -1; // "don't know whetherstdin is nonblocking"
+
 	while (1) { /* read lines until we reach cur_fline or wanted_match */
 		*p = '\0';
 		terminated = 0;
@@ -505,22 +511,29 @@ static void read_lines(void)
 			char c;
 			/* if no unprocessed chars left, eat more */
 			if (readpos >= read_size) {
-				// Read stdin, temporarily making it nonblocking (if it's not already).
-				// NB: we do NOT check eof_error status before reading.
+				// Read stdin, temporarily make it nonblocking (if it's not already)
+				if (ndelay_set < 0) {
+					ndelay_set = G.ndelay_set; // can be only 0 or 1
+					if (ndelay_set == 0) {
+						fdflags = ndelay_on(STDIN_FILENO);
+						if (fdflags & O_NONBLOCK)
+							ndelay_set = 2; // it _was_ nonblocking, do NOT restore later
+					} //else: G.ndelay_set=1: set nonblocking at open(FILE) time
+				} //else: we were here already, stdin is already nonblocking
+
+				// NB: we do NOT check last eof_error_ok before reading.
 				// This has the effect that e.g. PageDown on a regular file
 				// where we already reached EOF *will try reading anyway*,
 				// if the file is a growing log file, less *will* show the new data.
-				int flags = G.stdin_GETFL_flags;
-				if (!(flags & O_NONBLOCK))
-					fcntl(STDIN_FILENO, F_SETFL, flags|O_NONBLOCK);
-				eof_error = safe_read(STDIN_FILENO, readbuf, COMMON_BUFSIZE);
-				if (!(flags & O_NONBLOCK))
-					fcntl(STDIN_FILENO, F_SETFL, flags);
-
+				G.eof_error_ok = safe_read(STDIN_FILENO, readbuf, COMMON_BUFSIZE);
 				readpos = 0;
-				read_size = (eof_error < 0 ? 0 : eof_error);
-				if (eof_error <= 0)
+				read_size = G.eof_error_ok;
+				if (G.eof_error_ok <= 0) {
+					read_size = 0; // -1 would be seen as UNIT_MAX, prevent
+					if (G.eof_error_ok < 0 && errno == EAGAIN)
+						G.eof_error_ok = 1; // "neither EOF nor error"
 					goto reached_eof;
+				}
 			}
 			c = readbuf[readpos];
 			/* backspace? [needed for manpages] */
@@ -598,7 +611,7 @@ static void read_lines(void)
 			max_lineno++;
 
 		if (max_fline >= MAXLINES) {
-			eof_error = 0; /* Pretend we saw EOF */
+			G.eof_error_ok = 0; /* Pretend we saw EOF */
 			break;
 		}
 		if (!at_end()) {
@@ -613,24 +626,21 @@ static void read_lines(void)
 				break;
 #endif
 		}
-		if (eof_error <= 0) {
+		if (G.eof_error_ok <= 0) /* EOF or error? */
 			break;
-		}
 		max_fline++;
 		current_line = ((char*)xmalloc(w + 5)) + 4;
 		p = current_line;
 		last_line_pos = 0;
 	} /* end of "read lines until we reach cur_fline" loop */
 
-	if (eof_error < 0) {
-		if (errno == EAGAIN) {
-			eof_error = 1; /* "neither EOF nor error" */
-		} else {
-			print_statusline(bb_msg_read_error);
-		}
-	}
+	if (ndelay_set == 0) // stdin was not nonblocking, restore that
+		fcntl(STDIN_FILENO, F_SETFL, fdflags);
+
+	if (G.eof_error_ok < 0) // error?
+		print_statusline(bb_msg_read_error);
 #if ENABLE_FEATURE_LESS_FLAGS
-	else if (eof_error == 0)
+	else if (G.eof_error_ok == 0) // EOF?
 		num_lines = max_lineno;
 #endif
 
@@ -904,7 +914,7 @@ static void buffer_print(void)
 			print_ascii(buffer[i]);
 	}
 	if ((option_mask32 & (FLAG_E|FLAG_F))
-	 && eof_error <= 0
+	 && G.eof_error_ok <= 0
 	) {
 		i = (option_mask32 & FLAG_F) ? 0 : cur_fline;
 		if (max_fline - i <= max_displayed_line)
@@ -959,7 +969,7 @@ static void goto_lineno(int target)
 		while (LINENO(flines[cur_fline]) != target && cur_fline < max_fline)
 			++cur_fline;
 		/* target not reached but more input is available */
-		if (LINENO(flines[cur_fline]) != target && eof_error > 0) {
+		if (LINENO(flines[cur_fline]) != target && G.eof_error_ok > 0) {
 			read_lines();
 			goto retry;
 		}
@@ -1042,8 +1052,11 @@ static void buffer_lineno(int lineno)
 
 static void open_file_and_read_lines(void)
 {
+	G.ndelay_set = 0;
 	if (filename) {
 		xmove_fd(xopen(filename, O_RDONLY), STDIN_FILENO);
+		ndelay_on(STDIN_FILENO);
+		G.ndelay_set = 1;
 #if ENABLE_FEATURE_LESS_FLAGS
 		num_lines = REOPEN_AND_COUNT;
 #endif
@@ -1055,7 +1068,6 @@ static void open_file_and_read_lines(void)
 		num_lines = REOPEN_STDIN;
 #endif
 	}
-	G.stdin_GETFL_flags = fcntl(STDIN_FILENO, F_GETFL);
 	readpos = 0;
 	read_size = 0;
 	last_line_pos = 0;
@@ -1111,7 +1123,7 @@ static int64_t getch_nowait(void)
 	dont_poll_stdin = 1;
 	/* Are we interested in stdin? */
 	if (at_end()) {
-		if (eof_error > 0) /* did NOT reach eof yet */
+		if (G.eof_error_ok > 0) /* did NOT reach EOF/error yet */
 			dont_poll_stdin = 0; /* yes, we are interested in stdin */
 	}
 	/* Position cursor if line input is done */
@@ -1325,7 +1337,7 @@ static void goto_match(int match)
 	if (match < 0)
 		match = 0;
 	/* Try to find next match if eof isn't reached yet */
-	if (match >= num_matches && eof_error > 0) {
+	if (match >= num_matches && G.eof_error_ok > 0) {
 		wanted_match = match; /* "I want to read until I see N'th match" */
 		read_lines();
 	}
