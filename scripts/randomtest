@@ -55,6 +55,7 @@ if test x"$LIBC" = x"glibc"; then
 	cat .config \
 	| grep -v CONFIG_STATIC \
 	| grep -v CONFIG_FEATURE_LIBBUSYBOX_STATIC \
+	| grep -v CONFIG_TC \
 	\
 	| grep -v CONFIG_FEATURE_2_4_MODULES \
 	| grep -v CONFIG_FEATURE_USE_BSS_TAIL \
@@ -65,6 +66,7 @@ if test x"$LIBC" = x"glibc"; then
 	mv .config.new .config
 	echo '# CONFIG_STATIC is not set' >>.config
 	echo '# CONFIG_FEATURE_LIBBUSYBOX_STATIC is not set' >>.config
+	echo '# CONFIG_TC is not set' >>.config
 	# newer glibc (at least 2.23) no longer supply query_module() ABI.
 	# People who target 2.4 kernels would likely use older glibc (and older bbox).
 	echo '# CONFIG_FEATURE_2_4_MODULES is not set' >>.config
@@ -82,7 +84,6 @@ if test x"$LIBC" = x"uclibc"; then
 	| grep -v CONFIG_STATIC \
 	| grep -v CONFIG_BUILD_LIBBUSYBOX \
 	| grep -v CONFIG_PIE \
-	| grep -v CONFIG_FEATURE_TELNETD_SELFTEST_DEBUG \
 	\
 	| grep -v CONFIG_FEATURE_2_4_MODULES \
 	| grep -v CONFIG_FEATURE_SYNC_FANCY \
@@ -100,7 +101,6 @@ if test x"$LIBC" = x"uclibc"; then
 	echo 'CONFIG_STATIC=y' >>.config
 	echo '# CONFIG_BUILD_LIBBUSYBOX is not set' >>.config
 	echo '# CONFIG_PIE is not set' >>.config
-	echo '# CONFIG_FEATURE_TELNETD_SELFTEST_DEBUG is not set' >>.config
 	echo '# CONFIG_FEATURE_2_4_MODULES is not set' >>.config
 	echo '# CONFIG_FEATURE_SYNC_FANCY is not set' >>.config
 	# My uclibc installation does not support some needed APIs...
@@ -120,7 +120,6 @@ if test x"$LIBC" = x"musl"; then
 	cat .config \
 	| grep -v CONFIG_STATIC \
 	| grep -v CONFIG_DEBUG_SANITIZE \
-	| grep -v CONFIG_FEATURE_TELNETD_SELFTEST_DEBUG \
 	| grep -v CONFIG_LFS \
 	| grep -v CONFIG_EXTRA_COMPAT \
 	| grep -v CONFIG_FEATURE_2_4_MODULES \
@@ -132,7 +131,6 @@ if test x"$LIBC" = x"musl"; then
 	echo 'CONFIG_STATIC=y' >>.config
 	# "error: cannot specify -static with -fsanitize=address":
 	echo '# CONFIG_DEBUG_SANITIZE is not set' >>.config
-	echo '# CONFIG_FEATURE_TELNETD_SELFTEST_DEBUG is not set' >>.config
 	# with LFS off, uoff_t will have wrong width:
 	echo 'CONFIG_LFS=y' >>.config
 	echo '# CONFIG_EXTRA_COMPAT is not set' >>.config
