@@ -169,7 +169,7 @@ echo \$?
 ls cpio.testdir/dont_write 2>&1" \
 "\
 cpio: removing leading '../' from member names
-../dont_write
+dont_write
 to_extract
 1 blocks
 0
