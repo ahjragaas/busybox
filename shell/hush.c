@@ -11835,6 +11835,8 @@ static void print_escaped(const char *s)
 		putchar('"');
 	} while (*s);
 }
+#endif
+#if ENABLE_HUSH_EXPORT || ENABLE_HUSH_READONLY || ENABLE_HUSH_SET || ENABLE_HUSH_ALIAS
 static void print_pfx_escaped_nl(const char *pfx, const char *s)
 {
 	const char *p = strchr(s, '=');
