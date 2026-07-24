@@ -73,10 +73,10 @@
 //usage:     "\n	-c	Show only count of matching lines"
 //usage:     "\n	-o	Show only the matching part of line"
 //usage:     "\n	-q	Quiet. Return 0 if PATTERN is found, 1 otherwise"
-//usage:     "\n	-v	Select non-matching lines"
 //usage:     "\n	-s	Suppress open and read errors"
 //usage:     "\n	-r	Recurse"
 //usage:     "\n	-R	Recurse and dereference symlinks"
+//usage:     "\n	-v	Select non-matching lines"
 //usage:     "\n	-i	Ignore case"
 //usage:     "\n	-w	Match whole words only"
 //usage:     "\n	-x	Match whole lines only"
@@ -104,6 +104,58 @@
 //usage:#define egrep_full_usage ""
 //usage:#define fgrep_trivial_usage NOUSAGE_STR
 //usage:#define fgrep_full_usage ""
+
+// GNU grep 3.7 options:
+// s:short option supported by our code
+// S:short option "supported" by ignoring it
+// l:long option supported
+// .:not supported
+// s. | -E, --extended-regexp
+// s. | -F, --fixed-strings
+// .. | -G, --basic-regexp: Interpret PATTERNS as basic regular expressions (this is the default)
+// .. | -P, --perl-regexp
+// s. | -e PATTERNS, --regexp=PATTERNS
+// s. | -f FILE, --file=FILE
+// s. | -i, --ignore-case (-y is an obsolete synonym)
+//  . | --no-ignore-case
+// s. | -v, --invert-match
+// s. | -w, --word-regexp
+// s. | -x, --line-regexp
+// s. | -c, --count
+// l. | --color[=WHEN], --colour[=WHEN]
+// s. | -L, --files-without-match
+// s. | -l, --files-with-matches
+// s. | -m NUM, --max-count=NUM
+// s. | -o, --only-matching
+// sl.| -q, --quiet, --silent
+// s. | -s, --no-messages
+// .. | -b, --byte-offset
+// s. | -H, --with-filename
+// s. | -h, --no-filename
+//  . | --label=LABEL: Display input coming from standard input as input coming from file LABEL
+// s. | -n, --line-number
+// .. | -T, --initial-tab
+// .. | -Z, --null: Output zero byte (the ASCII NUL character) instead of the character that normally follows filename
+// s. | -A NUM, --after-context=NUM
+// s. | -B NUM, --before-context=NUM
+// s. | -C NUM, --context=NUM
+// .  | -NUM: same as -C NUM
+//  . | --group-separator=SEP: When -A, -B, or -C are in use, print SEP instead of -- between groups of lines
+//  . | --no-group-separator: When -A, -B, or -C are in use, do not print a separator between groups of lines
+// s. | -a, --text
+//  . | --binary-files=TYPE
+// S  | -I: Process binary files as if they did not contain matching data (equivalent to --binary-files=without-match)
+// .. | -D ACTION, --devices=ACTION
+// .. | -d ACTION, --directories=ACTION
+//  . | --exclude=GLOB: Skip any file with a name suffix that matches the pattern GLOB
+//  . | --exclude-from=FILE: Skip files whose base name matches any of the file-name globs read from FILE
+//  . | --exclude-dir=GLOB: Skip any directory with a name suffix that matches the pattern GLOB
+//  . | --include=GLOB: Search only files whose base name matches GLOB
+// s. | -r, --recursive
+// s. | -R, --dereference-recursive
+//  . | --line-buffered
+// .. | -U, --binary
+// s. | -z, --null-data
 
 /* -e,-f are lists; -m,-A,-B,-C have numeric param */
 #define OPTSTR_GREP \
@@ -713,22 +765,30 @@ int grep_main(int argc UNUSED_PARAM, char **argv)
 #if ENABLE_FEATURE_GREP_CONTEXT
 	int Copt, opts;
 #endif
+#if ENABLE_LONG_OPTS
+	static const char grep_longopts[] ALIGN1 =
+		"quiet\0" No_argument       "q"
+		"color\0" Optional_argument "\xff"
+	;
+# define GETOPT32 getopt32long
+#else
+# define GETOPT32 getopt32
+#endif
 	INIT_G();
 
 	/* For grep, exitcode of 1 is "not found". Other errors are 2: */
 	xfunc_error_retval = 2;
 
-	/* do normal option parsing */
 #if ENABLE_FEATURE_GREP_CONTEXT
 	/* -H unsets -h; -C unsets -A,-B */
-	opts = getopt32long(argv, "^"
+	opts = GETOPT32(argv, "^"
 		OPTSTR_GREP
 			"\0"
 			"H-h:C-AB",
-		"color\0" Optional_argument "\xff",
+		IF_LONG_OPTS(grep_longopts,)
 		&pattern_head, &fopt, &max_matches,
 		&lines_after, &lines_before, &Copt
-		, NULL
+		IF_LONG_OPTS(, NULL)
 	);
 
 	if (opts & OPT_C) {
@@ -753,8 +813,11 @@ int grep_main(int argc UNUSED_PARAM, char **argv)
 	}
 #else
 	/* with auto sanity checks */
-	getopt32(argv, "^" OPTSTR_GREP "\0" "H-h:c-n:q-n:l-n:", // why trailing ":"?
-		&pattern_head, &fopt, &max_matches);
+	GETOPT32(argv, "^" OPTSTR_GREP "\0" "H-h:c-n:q-n:l-n",
+		IF_LONG_OPTS(grep_longopts,)
+		&pattern_head, &fopt, &max_matches
+		IF_LONG_OPTS(, NULL)
+	);
 #endif
 	invert_search = ((option_mask32 & OPT_v) != 0); /* 0 | 1 */
 
