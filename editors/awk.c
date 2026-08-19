@@ -890,24 +890,30 @@ static char *nextword(char **s)
 	return p;
 }
 
+/* Note: will NOT stop at NUL (either on <NUL> or \<newline><NUL>):
+ * *s will be advanced past NUL!
+ * Make sure you always check NUL return before continuing.
+ */
 static char nextchar(char **s)
 {
-	char c, *pps;
+	char c;
  again:
 	c = *(*s)++;
-	pps = *s;
-	if (c == '\\')
+
+	if (c == '\\') {
+		char *pps = *s;
 		c = bb_process_escape_sequence((const char**)s);
-	/* Example awk statement:
-	 * s = "abc\"def"
-	 * we must treat \" as "
-	 */
-	if (c == '\\' && *s == pps) { /* unrecognized \z? */
-		c = *(*s); /* yes, fetch z */
-		if (c) { /* advance unless z = NUL */
-			(*s)++;
-			if (c == '\n') /* \<newline>? eat it */
-				goto again;
+		/* Example awk statement:
+		 * s = "abc\"def"
+		 * we must treat \" as "
+		 */
+		if (c == '\\' && *s == pps) { /* unrecognized \z? */
+			c = *(*s); /* yes, fetch z */
+			if (c) { /* advance unless z = NUL */
+				(*s)++;
+				if (c == '\n') /* \<newline>? eat it */
+					goto again;
+			}
 		}
 	}
 	return c;
@@ -1205,11 +1211,22 @@ static uint32_t next_token(uint32_t expected)
 			/* it's a string */
 			char *s = t_string = ++p;
 			while (*p != '"') {
-				char *pp;
-				if (*p == '\0' || *p == '\n')
+				char c, *pp;
+
+				/* Since we need to handle \<newline><NUL>
+				 * below, we can handle ordinary NUL there as well,
+				 * instead of here. Thus commented out.
+				 */
+				if (/* *p == '\0' || */ *p == '\n')
 					syntax_error(EMSG_UNEXP_EOS);
 				pp = p;
-				*s++ = nextchar(&pp);
+				c = *s++ = nextchar(&pp);
+				/* awk 'BEGIN { print "unterminated\
+				 * '
+				 * results in NUL here after nextchar() eats \<newline>
+				 */
+				if (c == '\0')
+					syntax_error(EMSG_UNEXP_EOS);
 				p = pp;
 			}
 			p++;
