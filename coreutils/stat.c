@@ -303,12 +303,23 @@ static void FAST_FUNC print_statfs(char *pformat, const char m,
 }
 #endif
 
+static void FAST_FUNC print_time_t(char *pformat, time_t val)
+{
+#define TYPE_SIGNED(t) ((t) -1 < (t) 0)
+	if (TYPE_SIGNED(time_t)) {
+		strcat(pformat, "lld");
+		printf(pformat, (long long) val);
+	} else {
+		strcat(pformat, "llu");
+		printf(pformat, (unsigned long long) val);
+	}
+}
+
 /* print stat info */
 static void FAST_FUNC print_stat(char *pformat, const char m,
 		const char *const filename, const void *data
 		IF_SELINUX(, security_context_t scontext))
 {
-#define TYPE_SIGNED(t) (! ((t) 0 < (t) -1))
 	struct stat *statbuf = (struct stat *) data;
 	struct passwd *pw_ent;
 	struct group *gw_ent;
@@ -382,20 +393,15 @@ static void FAST_FUNC print_stat(char *pformat, const char m,
 	} else if (m == 'x') {
 		printfs(pformat, human_time(&statbuf->st_atim));
 	} else if (m == 'X') {
-		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
-		/* note: (unsigned long) would be wrong:
-		 * imagine (unsigned long64)int32 */
-		printf(pformat, (long) statbuf->st_atime);
+		print_time_t(pformat, statbuf->st_atime);
 	} else if (m == 'y') {
 		printfs(pformat, human_time(&statbuf->st_mtim));
 	} else if (m == 'Y') {
-		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
-		printf(pformat, (long) statbuf->st_mtime);
+		print_time_t(pformat, statbuf->st_mtime);
 	} else if (m == 'z') {
 		printfs(pformat, human_time(&statbuf->st_ctim));
 	} else if (m == 'Z') {
-		strcat(pformat, TYPE_SIGNED(time_t) ? "ld" : "lu");
-		printf(pformat, (long) statbuf->st_ctime);
+		print_time_t(pformat, statbuf->st_ctime);
 # if ENABLE_SELINUX
 	} else if (m == 'C' && (option_mask32 & OPT_SELINUX)) {
 		printfs(pformat, scontext);
