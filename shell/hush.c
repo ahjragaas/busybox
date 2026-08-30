@@ -3295,7 +3295,7 @@ static void o_addqchr(o_string *o, int ch)
 	/* '-' is included because of this case:
 	 * >filename0 >filename1 >filename9; v='-'; echo filename[0"$v"9]
 	 */
-	char *found = strchr("*?[-\\" MAYBE_BRACES, ch);
+	const char *found = strchr("*?[-\\" MAYBE_BRACES, ch);
 	if (found)
 		sz++;
 	o_grow_by(o, sz);
@@ -7193,13 +7193,13 @@ static NOINLINE int expand_one_var(o_string *output, int n, char *arg, char **pp
 	p = *pp;
 	*p = '\0'; /* replace trailing SPECIAL_VAR_SYMBOL */
 	var = arg;
-	exp_saveptr = arg[1] ? strchr(VAR_ENCODED_SUBST_OPS, arg[1]) : NULL;
+	exp_saveptr = arg[1] ? (char*)strchr(VAR_ENCODED_SUBST_OPS, arg[1]) : NULL;
 	arg0 = arg[0];
 	arg[0] = (arg0 & 0x7f);
 	exp_op = 0;
 
 	if (arg[0] == '#' && arg[1] /* ${#...} but not ${#} */
-	 && (!exp_saveptr               /* and ( not(${#<op_char>...}) */
+	 && (!exp_saveptr               /* and ( not ${#<op_char>...} */
 	    || (arg[2] == '\0' && strchr(SPECIAL_VARS_STR, arg[1])) /* or ${#C} "len of $C" ) */
 	    )		/* NB: skipping ^^^specvar check mishandles ${#::2} */
 	) {
