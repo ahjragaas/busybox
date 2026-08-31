@@ -2697,9 +2697,7 @@ static char *expand_args(char *args)
 			replace = alt_filename;
 		} else {
 			if (*s == '\\' && s[1] != '\0') {
-				char *t;
-				for (t = s; *t; t++)
-					*t = t[1];
+				overlapping_strcpy(s, s + 1);
 				s++;
 			}
 			continue;
