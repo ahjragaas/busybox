@@ -44,7 +44,7 @@ static int all_dir_components_are_dirs(char *path)
 void FAST_FUNC create_links_from_list(llist_t *list)
 {
 	// This idea sounds better (fewer file ops):
-        //  Create hardlinks first, then symlinks.
+	//  Create hardlinks first, then symlinks.
 	// ^^^ but it breaks the "hardlink to symlink" case:
 	//  mkdir dir
 	//  >dir/a
@@ -75,6 +75,7 @@ void FAST_FUNC create_links_from_list(llist_t *list)
 				linkname, target
 			);
 			// Note: GNU tar 1.34 errors out only _after_ all links are (attempted to be) created
+			// We bail out at once
 		}
 		list = list->link;
 	}
