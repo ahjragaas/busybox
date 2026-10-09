@@ -1840,10 +1840,12 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
 					requested_ipv6 = (struct in6_addr*) iaaddr->data;
 					move_from_unaligned32(lease_seconds, iaaddr->data + 16 + 4);
 					lease_seconds = ntohl(lease_seconds);
-/// TODO: check for 0 lease time?
 					bb_info_msg("%s obtained, lease time %u",
 						"IPv6", /*inet_ntoa(temp_addr),*/ (unsigned)lease_seconds);
 					address_timeout = lease_seconds;
+					/* A zero valid lifetime revokes the address */
+					if (address_timeout == 0)
+						goto lease_revoked;
 				}
 				if (option_mask32 & OPT_d) {
 					struct d6_option *iaprefix;
@@ -1892,6 +1894,19 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
 					bb_info_msg("%s obtained, lease time %u",
 						"prefix", /*inet_ntoa(temp_addr),*/ (unsigned)lease_seconds);
 					prefix_timeout = lease_seconds;
+					/* A zero valid lifetime revokes the prefix */
+					if (prefix_timeout == 0) {
+ lease_revoked:
+						bb_simple_info_msg("lease revoked, entering init state");
+						d6_run_script_no_option("deconfig");
+						client_data.state = INIT_SELECTING;
+						client_data.first_secs = 0;
+						requested_ipv6 = NULL;
+						lease_remaining = 0;
+						timeout = 3; /* avoid excessive network traffic */
+						packet_num = 0;
+						continue;
+					}
 				}
 				if (!address_timeout)
 					address_timeout = prefix_timeout;
