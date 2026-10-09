@@ -841,7 +841,7 @@ static NOINLINE int send_d6_select(void)
 	return d6_mcast_from_client_data_ifindex(&packet, opt_ptr);
 }
 
-/* Unicast or broadcast a DHCP renew message
+/* Send a DHCPv6 Renew or Rebind message
  *
  * RFC 3315 18.1.3. Creation and Transmission of Renew Messages
  *
@@ -888,16 +888,19 @@ static NOINLINE int send_d6_select(void)
  * about parameter values the client would like to have returned.
  */
 /* NOINLINE: limit stack usage in caller */
-static NOINLINE int send_d6_renew(struct in6_addr *server_ipv6, struct in6_addr *our_cur_ipv6)
+static NOINLINE int send_d6_renew(int msg_type,
+		struct in6_addr *server_ipv6, struct in6_addr *our_cur_ipv6)
 {
 	struct d6_packet packet;
 	uint8_t *opt_ptr;
 
 	/* Fill in: msg type, xid, ELAPSED_TIME */
-	opt_ptr = init_d6_packet(&packet, D6_MSG_RENEW);
+	opt_ptr = init_d6_packet(&packet, msg_type);
 
-	/* server id */
-	opt_ptr = mempcpy(opt_ptr, client6_data.server_id, client6_data.server_id->len + 2+2);
+	/* Rebind must not contain a server ID */
+	if (msg_type == D6_MSG_RENEW) {
+		opt_ptr = mempcpy(opt_ptr, client6_data.server_id, client6_data.server_id->len + 2+2);
+	}
 	/* IA NA (contains requested IP) */
 	if (client6_data.ia_na)
 		opt_ptr = mempcpy(opt_ptr, client6_data.ia_na, client6_data.ia_na->len + 2+2);
@@ -910,7 +913,7 @@ static NOINLINE int send_d6_renew(struct in6_addr *server_ipv6, struct in6_addr 
 	 */
 	opt_ptr = add_d6_client_options(opt_ptr);
 
-	bb_info_msg("sending %s", "renew");
+	bb_info_msg("sending %s", msg_type == D6_MSG_RENEW ? "renew" : "rebind");
 	if (server_ipv6)
 		return d6_send_kernel_packet_from_client_data_ifindex(
 			&packet, (opt_ptr - (uint8_t*) &packet),
@@ -1514,7 +1517,8 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
 					if (opt & OPT_l)
 						send_d6_info_request();
 					else
-						send_d6_renew(OPT_m ? NULL : &srv6_buf, requested_ipv6);
+						send_d6_renew(D6_MSG_RENEW,
+								OPT_m ? NULL : &srv6_buf, requested_ipv6);
 					timeout = discover_timeout;
 					packet_num++;
 					continue;
@@ -1531,6 +1535,8 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
 				/* Switch to bcast receive */
 				change_listen_mode(LISTEN_RAW);
 				packet_num = 0;
+				client_data.xid = random_xid();
+				client_data.first_secs = 0;
 				/* fall right through */
 			case REBINDING:
 				/* Lease is *really* about to run out,
@@ -1538,9 +1544,8 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
 				if (lease_remaining > 0 && packet_num < 3) {
 					if (opt & OPT_l)
 						send_d6_info_request();
-					else /* send a broadcast renew request */
-//TODO: send_d6_renew uses D6_MSG_RENEW message, should we use D6_MSG_REBIND here instead?
-						send_d6_renew(/*server_ipv6:*/ NULL, requested_ipv6);
+					else /* send a multicast rebind request */
+						send_d6_renew(D6_MSG_REBIND, /*server_ipv6:*/ NULL, requested_ipv6);
 					timeout = discover_timeout;
 					packet_num++;
 					continue;
