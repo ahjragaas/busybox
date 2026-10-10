@@ -2873,7 +2873,8 @@ static const char *expandstr(const char *ps, int syntax_type);
 #if ENABLE_ASH_EXPAND_PRMT
 # define PSSYNTAX  4    /* prompt. never passed to SIT() */
 #endif
-/* PSSYNTAX expansion is identical to DQSYNTAX, except keeping '\$' as '\$' */
+/* PSSYNTAX expansion is identical to DQSYNTAX, except keeping '\$' as '\$'
+ * and '\\' as '\\' */
 
 /*
  * called by editline -- any expansions to the prompt should be added here.
@@ -13233,7 +13234,7 @@ readtoken1(int c, int syntax, struct heredoc *eofmark)
 				USTPUTC('\\', out);
 				pungetc();
 			} else {
-				if (pssyntax && c == '$') {
+				if (pssyntax && (c == '$' || c == '\\')) {
 					USTPUTC(CTLESC, out);
 					USTPUTC('\\', out);
 				}
