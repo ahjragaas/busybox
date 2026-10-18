@@ -332,7 +332,7 @@ static struct fs_info *create_fs_device(const char *device, const char *mntpnt,
 	if (strchr(type, ','))
 		type = (char *)"auto";
 	fs->type = xstrdup(type);
-	fs->opts = xstrdup(opts ? opts : "");
+	fs->opts = xstrdup(opts); /* can be NULL */
 	fs->passno = passno < 0 ? 1 : passno;
 	/*fs->flags = 0; */
 	/*fs->next = NULL; */
@@ -372,7 +372,7 @@ static void load_fs_info(const char *filename)
 }
 
 /* Lookup filesys in /etc/fstab and return the corresponding entry. */
-static struct fs_info *lookup(char *filesys)
+static struct fs_info *lookup_in_fs_info(const char *filesys)
 {
 	struct fs_info *fs;
 
@@ -556,7 +556,9 @@ static void execute(const char *type, char *device,
 	}
 #endif
 
-	resolve_mount_spec(&device);
+	/* int free_the_pointer = */ resolve_mount_spec(&device);
+	/* NB: the possible new pointer is malloced, we leak it */
+
 	G.args[G.num_args - 2] = device;
 	/* G.args[G.num_args - 1] = NULL; - already is */
 
@@ -645,7 +647,7 @@ static void fsck_device(struct fs_info *fs /*, int interactive */)
  * Returns TRUE if a partition on the same disk is already being
  * checked.
  */
-static int device_already_active(char *device)
+static int device_already_active(const char *device)
 {
 	struct fsck_instance *inst;
 	char *base;
@@ -1105,7 +1107,7 @@ int fsck_main(int argc UNUSED_PARAM, char **argv)
 			break;
 		}
 
-		fs = lookup(devices[i]);
+		fs = lookup_in_fs_info(devices[i]);
 		if (!fs)
 			fs = create_fs_device(devices[i], "", "auto", NULL, -1);
 		fsck_device(fs /*, interactive */);

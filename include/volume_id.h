@@ -25,7 +25,8 @@ void display_uuid_cache(int scan_devices);
 /* Returns:
  * 0: no UUID= or LABEL= prefix found
  * 1: UUID= or LABEL= prefix found. In this case,
- *    *fsname is replaced if device with such UUID or LABEL is found
+ *    *fsname is replaced if device with such UUID or LABEL is found.
+ *    The new string is malloced. The old string is NOT freed!
  */
 int resolve_mount_spec(char **fsname);
 int add_to_uuid_cache(const char *device);

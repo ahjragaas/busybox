@@ -151,7 +151,8 @@ static int swap_enable_disable(char *device)
 	int err = 0;
 	int quiet = 0;
 
-	resolve_mount_spec(&device);
+	/* int free_the_pointer = */ resolve_mount_spec(&device);
+	/* NB: the possible new pointer is malloced, we leak it */
 
 	if (do_swapoff) {
 		err = swapoff(device);
@@ -232,7 +233,7 @@ static int do_em_all_in_fstab(void)
 {
 	struct mntent *m;
 	int err = 0;
-	FILE *f = xfopen_for_read("/etc/fstab");
+	FILE *f = xfopen_for_read("/etc/fstab"); /* poor man's setmntent */
 
 	while ((m = getmntent(f)) != NULL) {
 		if (strcmp(m->mnt_type, MNTTYPE_SWAP) == 0) {
@@ -264,7 +265,7 @@ static int do_em_all_in_fstab(void)
 	}
 
 	if (ENABLE_FEATURE_CLEAN_UP)
-		endmntent(f);
+		fclose(f);
 
 	return err;
 }
