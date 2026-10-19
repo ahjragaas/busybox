@@ -233,7 +233,10 @@ static int do_em_all_in_fstab(void)
 {
 	struct mntent *m;
 	int err = 0;
-	FILE *f = xfopen_for_read("/etc/fstab"); /* poor man's setmntent */
+	FILE *f = setmntent("/etc/fstab", "r");
+
+	if (!f)
+		bb_simple_perror_msg_and_die("/etc/fstab");
 
 	while ((m = getmntent(f)) != NULL) {
 		if (strcmp(m->mnt_type, MNTTYPE_SWAP) == 0) {
@@ -265,7 +268,7 @@ static int do_em_all_in_fstab(void)
 	}
 
 	if (ENABLE_FEATURE_CLEAN_UP)
-		fclose(f);
+		endmntent(f);
 
 	return err;
 }
